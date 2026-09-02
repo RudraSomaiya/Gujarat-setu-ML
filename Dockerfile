@@ -51,8 +51,8 @@ RUN pip install --no-cache-dir -e ".[dev]"
 # Models are cached in the image layer — no download delay at inference time.
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8s.pt')" && \
     python -c "import open_clip; open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai')" && \
-    python -c "from ultralytics import YOLO; YOLO('keremberke/yolov8n-license-plate')" && \
-    python -c "from fast_plate_ocr import ONNXPlateRecognizer; ONNXPlateRecognizer('global-plates-mobile-vit-v2-model')"
+    python -c "from huggingface_hub import hf_hub_download; hf_hub_download('FarAwayFer/yolov8n_license_plate_recognition', 'best_yolov8n.pt')" && \
+    python -c "from fast_plate_ocr import LicensePlateRecognizer; LicensePlateRecognizer('global-plates-mobile-vit-v2-model')"
 
 # Copy source code (after model downloads so code changes don't invalidate the model cache layer)
 COPY ml/ ml/
