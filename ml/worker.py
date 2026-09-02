@@ -54,8 +54,8 @@ def process_camera(cam_external_id: str) -> None:
         log.error("%s Camera not found in DB — run scripts/seed.py first", prefix)
         return
 
-    from ml.auth import get_sentinel_cookie
-    cookie = get_sentinel_cookie()
+    from ml.auth import get_cookie
+    cookie = get_cookie()
 
     frame_count = 0
     detection_count = 0
@@ -127,7 +127,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    cam_ids = settings.camera_ids
+    cam_ids = settings.camera_ids()
     log.info("Starting %d camera workers: %s", len(cam_ids), cam_ids)
 
     threads = []

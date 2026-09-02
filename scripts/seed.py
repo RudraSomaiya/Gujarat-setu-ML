@@ -147,9 +147,8 @@ def seed(db_url: str) -> None:
 
 
 def main() -> None:
-    import os
-    db_url = os.environ.get("DATABASE_URL", "postgresql://setu:setu_dev_only@localhost:5432/setu")
-    seed(db_url)
+    from ml.config import settings
+    seed(settings.database_url)
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     yolo_model: str = "yolov8s.pt"
     clip_model: str = "ViT-B-32"
     clip_pretrained: str = "openai"
-    plate_model: str = "keremberke/yolov8n-license-plate"
+    plate_model: str = "FarAwayFer/yolov8n_license_plate_recognition"
     plate_ocr_model: str = "global-plates-mobile-vit-v2-model"
     plate_conf_threshold: float = 0.5
     detection_conf_threshold: float = 0.35
