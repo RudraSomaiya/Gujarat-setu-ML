@@ -124,9 +124,18 @@ class DetectionPipeline:
             
             if plate_crop.size == 0:
                 return None, None
-                
-            plate_crop_gray = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
-            preds = self.plate_ocr.run(plate_crop_gray, return_confidence=True)
+            
+            # ── Preprocessing: upscale + CLAHE + sharpen ──
+            h, w = plate_crop.shape[:2]
+            upscaled = cv2.resize(plate_crop, (w * 3, h * 3), interpolation=cv2.INTER_CUBIC)
+            gray = cv2.cvtColor(upscaled, cv2.COLOR_BGR2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            denoised = cv2.bilateralFilter(enhanced, 9, 75, 75)
+            blurred = cv2.GaussianBlur(denoised, (0, 0), 3)
+            plate_processed = cv2.addWeighted(denoised, 1.5, blurred, -0.5, 0)
+            
+            preds = self.plate_ocr.run(plate_processed, return_confidence=True)
             if not preds:
                 return None, None
                 
@@ -136,6 +145,14 @@ class DetectionPipeline:
                 return None, None
                 
             ocr_conf = float(sum(pred.char_probs) / len(pred.char_probs)) if pred.char_probs is not None and len(pred.char_probs) > 0 else 0.0
+            
+            # ── Indian plate regex validation + fuzzy correction ──
+            from ml.plate_validator import validate_plate
+            validated = validate_plate(clean_text)
+            if validated:
+                return validated, min(plate_conf, ocr_conf)
+            
+            # Return raw text if validation fails (still useful for debugging)
             return clean_text, min(plate_conf, ocr_conf)
         except Exception as e:
             log.warning(f"Plate extraction failed: {e}")
