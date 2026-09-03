@@ -189,7 +189,25 @@ class CameraStream:
 
     # ── HLS path ──────────────────────────────────────────────────────────────
 
-    def _frames_hls(self) -> Generator:
+    @staticmethod
+    def _time_to_seg_idx(time_str: str, total_segs: int, archive_hours: float = 12.0) -> int:
+        """Convert 'HH:MM' or 'HH:MM:SS' string to nearest segment index."""
+        parts = time_str.strip().split(":")
+        h = int(parts[0])
+        m = int(parts[1]) if len(parts) > 1 else 0
+        s = int(parts[2]) if len(parts) > 2 else 0
+        total_secs = h * 3600 + m * 60 + s
+        archive_secs = archive_hours * 3600
+        frac = min(1.0, total_secs / archive_secs)
+        return int(frac * total_segs)
+
+    def _frames_hls(
+        self,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        start_seg: int = 0,
+        end_seg: Optional[int] = None,
+    ) -> Generator:
         fetcher = _HLSFetcher(self.cookie)
         frame_idx = 0
         backoff = settings.stream_reconnect_base_s
@@ -205,6 +223,26 @@ class CameraStream:
 
                 log.info("%s %d segments in archive", self.prefix, len(segments))
                 backoff = settings.stream_reconnect_base_s  # reset
+
+                # Resolve time strings to segment indices now that we know total count
+                _start = start_seg
+                _stop = end_seg
+                if start_time:
+                    _start = self._time_to_seg_idx(start_time, len(segments))
+                if end_time:
+                    _stop = self._time_to_seg_idx(end_time, len(segments))
+
+                # Slice to requested time window
+                _end = _stop if _stop is not None else len(segments)
+                _end = min(_end, len(segments))
+                _start = max(0, min(_start, _end))
+                window = segments[_start:_end]
+                if _start > 0 or _end < len(segments):
+                    log.info(
+                        "%s Time window: segments %d–%d of %d (~%.1f h into archive)",
+                        self.prefix, _start, _end, len(segments),
+                        _start * (12.0 / len(segments)) * len(segments) / 3600
+                    )
 
                 # ── Double-buffered segment download ──────────────────────────
                 # While we decode segment N, we prefetch segment N+1 in the
@@ -222,10 +260,14 @@ class CameraStream:
                     finally:
                         prefetch_event.set()
 
-                # Kick off first segment download immediately
-                threading.Thread(target=_prefetch, args=(segments[0],), daemon=True).start()
+                if not window:
+                    log.warning("%s No segments in requested range, resetting to full archive", self.prefix)
+                    window = segments
 
-                for seg_idx, seg_url in enumerate(segments):
+                # Kick off first segment download immediately
+                threading.Thread(target=_prefetch, args=(window[0],), daemon=True).start()
+
+                for seg_idx, seg_url in enumerate(window):
                     # Wait for this segment's prefetch to complete
                     if not prefetch_event.wait(timeout=120):
                         log.warning("%s Segment %d timed out, skipping", self.prefix, seg_idx)
@@ -280,12 +322,29 @@ class CameraStream:
 
     # ── Public interface ──────────────────────────────────────────────────────
 
-    def frames(self) -> Generator:
-        """Yield (frame_idx, pts_ms, frame_bgr) indefinitely."""
+    def frames(
+        self,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> Generator:
+        """Yield (frame_idx, pts_ms, frame_bgr) continuously.
+
+        Args:
+            start_time: Optional 'HH:MM' or 'HH:MM:SS' position in the 12-hour
+                archive to start from. Only applies to the HLS path.
+            end_time: Optional 'HH:MM' or 'HH:MM:SS' position to stop at.
+                When reached, iteration ends (does not loop).
+        """
         if self.use_rtsp:
             yield from self._frames_rtsp()
         else:
-            yield from self._frames_hls()
+            # Resolve start/end to segment indices after fetching the manifest.
+            # We pass them as 0/None here and let _frames_hls resolve them once
+            # it knows the total segment count.
+            yield from self._frames_hls(
+                start_time=start_time,
+                end_time=end_time,
+            )
 
     def __enter__(self) -> "CameraStream":
         return self

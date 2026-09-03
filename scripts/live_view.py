@@ -14,6 +14,10 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 def main():
     parser = argparse.ArgumentParser(description="Live view of camera feed with YOLO & Plate OCR")
     parser.add_argument("camera_id", nargs="?", default="cam06", help="Camera ID to view (default: cam06)")
+    parser.add_argument("--start", metavar="HH:MM", default=None,
+                        help="Start position in the 12-hour archive, e.g. '09:30'")
+    parser.add_argument("--end", metavar="HH:MM", default=None,
+                        help="End position in the archive, e.g. '11:00'. Stops when reached.")
     args = parser.parse_args()
 
     warm_all_models()
@@ -21,7 +25,7 @@ def main():
     cookie = get_cookie()
 
     with CameraStream(args.camera_id, cookie) as stream:
-        for frame_idx, pts_ms, frame in stream.frames():
+        for frame_idx, pts_ms, frame in stream.frames(start_time=args.start, end_time=args.end):
             detections = pipeline.process_frame(frame, args.camera_id, pts_ms)
             
             for det in detections:
