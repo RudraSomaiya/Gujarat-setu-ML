@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     )
 
     # ── Sentinel camera sandbox ──────────────────────────────────────────────
+    sentinel_email: str
     sentinel_password: str = "DBAD-4UQP-BSTV"
     """Password for POST /auth/login on the Sentinel sandbox."""
 
@@ -110,6 +111,11 @@ class Settings(BaseSettings):
 
     def rtsp_url(self, cam_id: str) -> str:
         """Build an RTSP stream URL for *cam_id*."""
+        import urllib.parse
+        if self.sentinel_rtsp_base.startswith("rtsp://") and self.sentinel_email:
+            encoded_email = urllib.parse.quote(self.sentinel_email, safe='')
+            base_no_scheme = self.sentinel_rtsp_base[7:]
+            return f"rtsp://{encoded_email}:{self.sentinel_password}@{base_no_scheme}/{cam_id}"
         return f"{self.sentinel_rtsp_base}/{cam_id}"
 
     def hls_url(self, cam_id: str) -> str:

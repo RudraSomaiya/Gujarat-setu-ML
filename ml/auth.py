@@ -70,7 +70,7 @@ def get_sentinel_cookie(password: str) -> str:
     # not in any subsequent page.
     response = requests.post(
         login_url,
-        data={"password": password},
+        data={"email": settings.sentinel_email, "password": password},
         allow_redirects=False,
         timeout=10,
     )
