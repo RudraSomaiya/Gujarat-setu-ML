@@ -73,6 +73,28 @@ def run_easyocr(plate_bgr, reader, preprocess=True):
     return (text or None), conf
 
 
+def run_paddle(plate_bgr, reader, preprocess=True):
+    img = preprocess_plate(plate_bgr) if preprocess else plate_bgr
+    # PaddleOCR logs a lot of debug info to stdout by default, we suppress it during init
+    try:
+        result = reader.ocr(img, cls=False)
+    except Exception:
+        return None, 0.0
+        
+    if not result or not result[0]:
+        return None, 0.0
+        
+    texts, confs = [], []
+    for line in result[0]:
+        # line format: [[box points], ('text', conf)]
+        texts.append(line[1][0])
+        confs.append(line[1][1])
+        
+    text = re.sub(r'[^A-Z0-9]', '', ''.join(texts).upper())
+    conf = sum(confs) / len(confs) if confs else 0.0
+    return (text or None), conf
+
+
 def decode_segment(seg_bytes: bytes) -> list[np.ndarray]:
     """Decode a .ts segment into a list of frames."""
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".ts")
@@ -131,6 +153,19 @@ def main():
         log.warning("EasyOCR not installed — skipping that column")
         easy_reader = None
         has_easy = False
+
+    log.info("Loading PaddleOCR...")
+    try:
+        from paddleocr import PaddleOCR
+        import logging as paddle_logging
+        paddle_logging.getLogger('ppocr').setLevel(paddle_logging.ERROR)
+        paddle_reader = PaddleOCR(use_textline_orientation=False, lang='en')
+        has_paddle = True
+        log.info("PaddleOCR ✓")
+    except ImportError:
+        log.warning("PaddleOCR not installed — skipping that column")
+        paddle_reader = None
+        has_paddle = False
 
     # ── Fetch manifest and pick random segments ──
     cookie = get_cookie()
@@ -228,33 +263,47 @@ def main():
 
                 plate_count += 1
 
+                raw_filename = f"p{plate_count:04d}_raw.png"
+                pre_filename = f"p{plate_count:04d}_pre.png"
                 if args.save_crops:
-                    cv2.imwrite(str(crop_dir / f"p{plate_count:04d}_raw.png"), plate)
-                    cv2.imwrite(str(crop_dir / f"p{plate_count:04d}_pre.png"), preprocess_plate(plate))
+                    cv2.imwrite(str(crop_dir / raw_filename), plate)
+                    cv2.imwrite(str(crop_dir / pre_filename), preprocess_plate(plate))
 
                 # ── Run OCR engines ──
                 fp_text, fp_conf = run_fast_ocr(plate, fast_ocr, preprocess=False)
                 fpp_text, fpp_conf = run_fast_ocr(plate, fast_ocr, preprocess=True)
                 easy_text, easy_conf = (run_easyocr(plate, easy_reader) if has_easy else (None, 0.0))
+                
+                paddle_raw_text, paddle_raw_conf = (run_paddle(plate, paddle_reader, preprocess=False) if has_paddle else (None, 0.0))
+                paddle_pre_text, paddle_pre_conf = (run_paddle(plate, paddle_reader, preprocess=True) if has_paddle else (None, 0.0))
 
                 fp_v   = validate_plate(fp_text)   if fp_text   else None
                 fpp_v  = validate_plate(fpp_text)  if fpp_text  else None
                 easy_v = validate_plate(easy_text) if easy_text else None
+                pad_raw_v = validate_plate(paddle_raw_text) if paddle_raw_text else None
+                pad_pre_v = validate_plate(paddle_pre_text) if paddle_pre_text else None
 
                 cls_name = VEHICLE_CLASSES.get(cls_id, "?")
                 ts = f"~{archive_time} seg={seg_idx}"
 
                 log.info(f"\n── Plate #{plate_count} ({cls_name}, det={pconf:.0%}, {ts}) ──")
+                if args.save_crops:
+                    log.info(f"  Files saved:  {raw_filename}  |  {pre_filename}")
                 log.info(f"  fast-ocr (raw): {str(fp_text):>12s} ({fp_conf:.0%})  validated={fp_v or '✗'}")
                 log.info(f"  fast-ocr (pre): {str(fpp_text):>12s} ({fpp_conf:.0%})  validated={fpp_v or '✗'}")
                 if has_easy:
                     log.info(f"  EasyOCR  (pre): {str(easy_text):>12s} ({easy_conf:.0%})  validated={easy_v or '✗'}")
+                if has_paddle:
+                    log.info(f"  Paddle   (raw): {str(paddle_raw_text):>12s} ({paddle_raw_conf:.0%})  validated={pad_raw_v or '✗'}")
+                    log.info(f"  Paddle   (pre): {str(paddle_pre_text):>12s} ({paddle_pre_conf:.0%})  validated={pad_pre_v or '✗'}")
 
                 results_table.append({
                     "plate_no": plate_count, "time": archive_time, "cls": cls_name,
-                    "fp_raw": fp_text, "fp_raw_v": fp_v,
-                    "fp_pre": fpp_text, "fp_pre_v": fpp_v,
-                    "easy":   easy_text if has_easy else "N/A", "easy_v": easy_v,
+                    "fp_raw_v": fp_v,
+                    "fp_pre_v": fpp_v,
+                    "easy_v": easy_v,
+                    "pad_raw_v": pad_raw_v,
+                    "pad_pre_v": pad_pre_v,
                 })
 
                 if plate_count >= args.samples:
@@ -269,6 +318,8 @@ def main():
     fp_raw_hits  = sum(1 for r in results_table if r["fp_raw_v"])
     fp_pre_hits  = sum(1 for r in results_table if r["fp_pre_v"])
     easy_hits    = sum(1 for r in results_table if r["easy_v"])
+    pad_raw_hits = sum(1 for r in results_table if r["pad_raw_v"])
+    pad_pre_hits = sum(1 for r in results_table if r["pad_pre_v"])
 
     if results_table:
         log.info(f"\nValidation pass rate (Indian plate format):")
@@ -276,6 +327,9 @@ def main():
         log.info(f"  fast-ocr (pre):       {fp_pre_hits}/{plate_count} = {fp_pre_hits/plate_count:.0%}")
         if has_easy:
             log.info(f"  EasyOCR  (pre):       {easy_hits}/{plate_count} = {easy_hits/plate_count:.0%}")
+        if has_paddle:
+            log.info(f"  Paddle   (raw):       {pad_raw_hits}/{plate_count} = {pad_raw_hits/plate_count:.0%}")
+            log.info(f"  Paddle   (pre):       {pad_pre_hits}/{plate_count} = {pad_pre_hits/plate_count:.0%}")
 
     if args.save_crops:
         log.info(f"\nCrops saved to {crop_dir.absolute()}")
