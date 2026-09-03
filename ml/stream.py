@@ -144,7 +144,9 @@ class CameraStream:
         self.cam_id = cam_id
         self.cookie = cookie
         self.cap: Optional[cv2.VideoCapture] = None
-        self.use_rtsp = is_rtsp_reachable(cam_id)
+        # HLS is primary — every segment starts with an IDR so grey smear is impossible.
+        # RTSP kept as opt-in via FORCE_RTSP=true in .env for on-LAN / low-latency use.
+        self.use_rtsp = getattr(settings, "force_rtsp", False) and is_rtsp_reachable(cam_id)
         self.prefix = f"[{cam_id}]"
 
         mode = "RTSP" if self.use_rtsp else "HLS"

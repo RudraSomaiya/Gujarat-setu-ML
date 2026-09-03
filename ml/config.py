@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     rtsp_port: int = 8554
     """Port used by the RTSP server (for reachability probes)."""
 
+    force_rtsp: bool = False
+    """Set to true to prefer RTSP over HLS (faster but susceptible to grey smear on VOD streams)."""
+
     rtsp_open_timeout_ms: int = 5_000
     """cv2.CAP_PROP_OPEN_TIMEOUT_MSEC for RTSP captures."""
 
