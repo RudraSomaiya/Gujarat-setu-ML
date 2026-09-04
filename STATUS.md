@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-The Setu ML worker processes 30 real camera feeds (12-hour HLS loops, 480p, AES-128 encrypted) provided by the hackathon sandbox at `cctv.corp8.cloud`. The primary goal is **Temporal Natural Language Semantic Search** and **Visual Re-identification** across ~360 hours of surveillance footage, reducing hundreds of hours of manual footage review to sub-second vector queries.
+The Setu ML worker processes 30 real camera feeds (12-hour HLS loops, **primarily 1080p** — ~18/30 cameras confirmed 1920×1080, ~5 are 854×480, AES-128 encrypted) provided by the hackathon sandbox at `cctv.corp8.cloud`. The primary goal is **Temporal Natural Language Semantic Search** and **Visual Re-identification** across ~360 hours of surveillance footage, reducing hundreds of hours of manual footage review to sub-second vector queries.
 
 ---
 

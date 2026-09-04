@@ -26,8 +26,7 @@ dependencies = [
   # Config + HTTP
   "pydantic-settings>=2.4",
   "pydantic>=2.9",
-  "requests>=2.32",            # Sentinel cookie auth
-  "tenacity>=8.5",             # Retry / backoff utilities
+  "requests>=2.32",            # Sentinel cookie auth + HLS segment download
 ]
 
 [project.optional-dependencies]

@@ -35,11 +35,61 @@ class Detection:
     dominant_color: Optional[str]  # HSV colour bucket for NL search precision
 
 class DetectionPipeline:
+    # ── CLIP zero-shot label sets ─────────────────────────────────────────────
+    # These text prompts are encoded once at init time. For each detection crop
+    # the image embedding is compared (dot product) against each label embedding
+    # and the argmax becomes the label. Cost: 8 dot products per detection.
+    # Both color and class use this approach — no HSV math, no COCO-class limits.
+
+    _CLASS_PROMPTS = [
+        "auto rickshaw",       # India-specific — COCO doesn't have this
+        "motorcycle or bike",
+        "city bus or coach",
+        "truck or lorry",
+        "car or sedan or SUV",
+        "tractor or farm vehicle",
+        "pickup truck or van",
+        "person walking",
+    ]
+    _CLASS_NAMES = [
+        "auto_rickshaw", "motorcycle", "bus", "truck",
+        "car", "tractor", "truck", "person",
+    ]
+
+    _COLOR_PROMPTS = [
+        "a red coloured vehicle",
+        "a blue coloured vehicle",
+        "a white coloured vehicle",
+        "a yellow coloured vehicle",
+        "a black coloured vehicle",
+        "a silver or grey coloured vehicle",
+        "a green coloured vehicle",
+        "an orange coloured vehicle",
+    ]
+    _COLOR_NAMES = [
+        "red", "blue", "white", "yellow", "black", "silver", "green", "orange",
+    ]
+
     def __init__(self):
         self.yolo = get_yolo()
         self.clip, self.clip_preprocess = get_clip()
         self.plate_detector = get_plate_detector()
         self.plate_ocr = get_plate_ocr()
+
+        # Pre-encode CLIP label sets once at startup.
+        # Shape: (N_labels, 512), L2-normalized — ready for dot-product scoring.
+        import open_clip
+        tokenizer = open_clip.get_tokenizer("ViT-B-32")
+        with torch.no_grad():
+            cls_tokens = tokenizer(self._CLASS_PROMPTS).to(device)
+            cls_embs = self.clip.encode_text(cls_tokens)
+            cls_embs /= cls_embs.norm(dim=-1, keepdim=True)
+            self._class_label_embs = cls_embs  # (8, 512) on device
+
+            col_tokens = tokenizer(self._COLOR_PROMPTS).to(device)
+            col_embs = self.clip.encode_text(col_tokens)
+            col_embs /= col_embs.norm(dim=-1, keepdim=True)
+            self._color_label_embs = col_embs  # (8, 512) on device
 
         # One isolated ByteTracker per DetectionPipeline instance.
         # worker.py creates one pipeline per camera thread, so this is effectively
@@ -122,22 +172,34 @@ class DetectionPipeline:
             crop = frame_bgr[y1:y2, x1:x2]
             if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
                 continue
-                
-            embedding = self._embed_crop(crop)
+
+            embedding_tensor, embedding = self._embed_crop(crop)
             if not embedding:
                 continue
 
-            dominant_color = self._extract_color(crop)
+            # ── CLIP zero-shot color + class ──────────────────────────────────
+            # embedding_tensor is shape (1, 512), already L2-normalised, on device.
+            # Label embs are (N, 512). Dot product = cosine similarity.
+            with torch.no_grad():
+                color_scores = (embedding_tensor @ self._color_label_embs.T)[0]
+                color_idx = int(color_scores.argmax().item())
+                dominant_color = self._COLOR_NAMES[color_idx]
+
+                class_scores = (embedding_tensor @ self._class_label_embs.T)[0]
+                class_idx = int(class_scores.argmax().item())
+                clip_class_name = self._CLASS_NAMES[class_idx]
+            # ──────────────────────────────────────────────────────────────────
 
             plate_text, plate_conf = None, None
-            if cls_id in [2, 3, 5, 7]: # vehicles
-                plate_text, plate_conf = self._extract_plate(crop)
-                
+            # Run plate OCR on all detections; CLIP class may catch vehicles YOLO
+            # labelled as 'person' or vice-versa, so don't gate on cls_id alone.
+            plate_text, plate_conf = self._extract_plate(crop)
+
             detections.append(Detection(
                 id=str(uuid.uuid4()),
                 camera_id=camera_id,
                 track_id=track_id,
-                class_name=VEHICLE_CLASSES.get(cls_id, 'unknown'),
+                class_name=clip_class_name,   # CLIP zero-shot, not YOLO COCO label
                 bbox={'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2},
                 confidence=conf,
                 plate_text=plate_text,
@@ -146,12 +208,14 @@ class DetectionPipeline:
                 thumbnail_key=None,
                 ts=ts,
                 pts_ms=pts_ms,
-                dominant_color=dominant_color,
+                dominant_color=dominant_color,  # CLIP zero-shot, not HSV buckets
             ))
-            
+
         return detections
 
-    def _embed_crop(self, crop_bgr: np.ndarray) -> list[float]:
+    def _embed_crop(self, crop_bgr: np.ndarray) -> tuple[torch.Tensor | None, list[float]]:
+        """Encode a BGR crop with CLIP. Returns (tensor, list) — tensor stays on
+        device for zero-shot label scoring; list is stored in DB."""
         try:
             crop_rgb = crop_bgr[:, :, ::-1]
             pil_img = Image.fromarray(crop_rgb)
@@ -159,9 +223,9 @@ class DetectionPipeline:
             with torch.no_grad():
                 embed = self.clip.encode_image(img_tensor)
                 embed /= embed.norm(dim=-1, keepdim=True)
-            return embed[0].cpu().tolist()
+            return embed, embed[0].cpu().tolist()
         except Exception:
-            return []
+            return None, []
 
     def _extract_color(self, crop_bgr: np.ndarray) -> Optional[str]:
         """Dominant colour of the crop using HSV histogram bucketing.

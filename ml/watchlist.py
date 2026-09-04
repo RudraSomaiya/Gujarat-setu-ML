@@ -34,16 +34,23 @@ class WatchlistChecker:
     def check(self, det: Detection) -> str | None:
         with self._lock:
             entries = self._entries.copy()
-            
+
         for entry in entries:
             if entry['type'] == 'plate' and det.plate_text:
                 if det.plate_text.upper() == entry['value'].upper():
                     return str(entry['id'])
-                    
-            elif entry['type'] == 'person_embedding' and entry['reference_embedding'] is not None:
-                det_emb = np.array(det.embedding, dtype=np.float32)
-                sim = np.dot(det_emb, entry['reference_embedding'])
-                if sim >= settings.watchlist_embed_threshold:
-                    return str(entry['id'])
-                    
+
+            # NOTE: 'person_embedding' / 'vehicle_embedding' watchlist matching via CLIP
+            # is intentionally disabled. Measured inter-vehicle CLIP similarity is 0.76–0.91
+            # for completely different vehicles — no threshold separates "same vehicle" from
+            # "different vehicle of same type". Binary identity matching requires a dedicated
+            # re-ID model (VeRi-776, OSNet). CLIP powers NL text search (ranked retrieval),
+            # not identity verification. Embedding-based watchlist matching will produce false
+            # alerts on virtually every detection.
+            # elif entry['type'] == 'person_embedding' and entry['reference_embedding'] is not None:
+            #     det_emb = np.array(det.embedding, dtype=np.float32)
+            #     sim = np.dot(det_emb, entry['reference_embedding'])
+            #     if sim >= settings.watchlist_embed_threshold:
+            #         return str(entry['id'])
+
         return None

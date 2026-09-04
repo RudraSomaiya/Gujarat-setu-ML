@@ -93,13 +93,23 @@ def search_text(
     conn.close()
 
     if not rows:
-        print("\no matching detections found.")
+        print("\nNo matching detections found.")
         return
 
-    print(f"\nRanked Results (Top this up) showing up to {top_k} highest similarity:")
-    print("=" * 110)
-    print(f"{'#':<3} {'Camera':<8} {'Class':<9} {'Color':<8} {"Similarity":<10} {'Track':<6} {'Seek (pts)':<8} {'Plate':<12} {'Thumbnail Key'}")
-    print("-" * 110)
+    def _fmt_seek(pts_ms: float | None) -> str:
+        """Format pts_ms (milliseconds from recording start) as HH:MM:SS."""
+        if pts_ms is None:
+            return "-"
+        total_s = int(pts_ms / 1000.0)
+        h = total_s // 3600
+        m = (total_s % 3600) // 60
+        s = total_s % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    print(f"\nRanked Results — top {top_k} by CLIP similarity:")
+    print("=" * 120)
+    print(f"{'#':<3} {'Camera':<8} {'Class':<14} {'Color':<8} {'Sim':<7} {'Track':<6} {'Seek (HH:MM:SS)':<16} {'Plate':<12} Thumbnail Key")
+    print("-" * 120)
 
     for idx, r in enumerate(rows, 1):
         sim = float(r['similarity'])
@@ -110,12 +120,12 @@ def search_text(
         color = r['dominant_color'] or '-'
         sim_str = f"{sim * 100:.1f}%"
         track = str(r['track_id']) if r['track_id'] is not None else '-'
-        pts = f"{r['pts_ms'] / 1000.0:.1f}s" if r['pts_ms'] is not None else '-'
+        seek = _fmt_seek(r['pts_ms'])
         plate = r['plate_text'] or '-'
         thumb = r['thumbnail_key'] or '-'
-        print(f"{idx:<3} {cam:<8} {cls:<9} {color:<8} {sim_str:<10} {track:<6} {pts:<10} {plate:<12} {thumb}")
+        print(f"{idx:<3} {cam:<8} {cls:<14} {color:<8} {sim_str:<7} {track:<6} {seek:<16} {plate:<12} {thumb}")
 
-    print("=" * 110)
+    print("=" * 120)
 
 
 def main():
