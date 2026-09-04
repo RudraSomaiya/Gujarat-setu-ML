@@ -40,6 +40,7 @@ dev = [
 [project.scripts]
 setu-worker = "ml.worker:main"
 setu-check  = "ml.scripts.check_feeds:main"
+setu-index  = "scripts.batch_index:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
