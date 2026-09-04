@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
   # Computer vision + AI
   "ultralytics>=8.3",          # YOLOv8 + ByteTrack (tracker built-in)
+  "lap>=0.5.12",               # Linear assignment (required by BYTETracker — ultralytics dep)
   "open-clip-torch>=2.24",     # CLIP ViT-B/32 visual + text embeddings
   "torch>=2.3",                # PyTorch (CUDA build installed separately, see README)
   "torchvision>=0.18",

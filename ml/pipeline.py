@@ -41,6 +41,22 @@ class DetectionPipeline:
         self.plate_detector = get_plate_detector()
         self.plate_ocr = get_plate_ocr()
 
+        # One isolated ByteTracker per DetectionPipeline instance.
+        # worker.py creates one pipeline per camera thread, so this is effectively
+        # one tracker per camera — no shared state, no cross-camera track_id bleed.
+        from ultralytics.trackers import BYTETracker
+        from ultralytics.utils import IterableSimpleNamespace
+        _tracker_args = IterableSimpleNamespace(
+            track_high_thresh=0.5,    # min conf to enter high-conf association
+            track_low_thresh=0.1,     # min conf for low-conf second-pass association
+            new_track_thresh=0.6,     # min conf to create a new track
+            track_buffer=30,          # frames to keep a lost track (30 ≈ 5s at 6 FPS)
+            match_thresh=0.8,         # IoU threshold for first-pass association
+            fuse_score=True,          # fuse detection score into track score
+            frame_rate=6,             # approximate processed FPS (frame_skip=5 at 30 FPS)
+        )
+        self.tracker = BYTETracker(_tracker_args)
+
     def process_frame(self, frame_bgr: np.ndarray, camera_id: str, pts_ms: float) -> list[Detection]:
         with _inference_lock:
             results = self.yolo.predict(
@@ -53,18 +69,53 @@ class DetectionPipeline:
         detections = []
         if not results or not results[0].boxes:
             return detections
-            
-        boxes = results[0].boxes
+
+        yolo_result = results[0]
+        boxes = yolo_result.boxes
         ts = datetime.now(timezone.utc)
-        
-        for box in boxes:
+
+        # ── ByteTrack: feed YOLO boxes into this camera's isolated tracker ────
+        # tracker.update() returns an (N, 7+) array: [x1,y1,x2,y2,track_id,conf,cls_id]
+        # Each row's original index into `boxes` is stored in row[-1] (the `idx` field).
+        # We build a dict {box_idx: track_id} for fast lookup below.
+        track_id_by_idx: dict[int, int] = {}
+        try:
+            tracked = self.tracker.update(yolo_result, frame_bgr)
+            if tracked is not None and len(tracked) > 0:
+                # tracked array columns: x1,y1,x2,y2, track_id, conf, cls, *extra
+                # The tracker preserves the detection index in an attribute on STrack;
+                # the returned numpy array has it at column index 4 as the track ID.
+                # Ultralytics BYTETracker returns shape (N,7): xyxy + tid + conf + cls
+                for row in tracked:
+                    if len(row) >= 7:
+                        # Find matching box by IoU with x1y1x2y2
+                        tx1, ty1, tx2, ty2 = float(row[0]), float(row[1]), float(row[2]), float(row[3])
+                        tid = int(row[4])
+                        # Match back to original box index by closest xyxy
+                        best_idx, best_iou = -1, -1.0
+                        for i, box in enumerate(boxes):
+                            bx1, by1, bx2, by2 = box.xyxy[0].tolist()
+                            inter_x1, inter_y1 = max(tx1, bx1), max(ty1, by1)
+                            inter_x2, inter_y2 = min(tx2, bx2), min(ty2, by2)
+                            inter = max(0.0, inter_x2 - inter_x1) * max(0.0, inter_y2 - inter_y1)
+                            union = ((tx2-tx1)*(ty2-ty1) + (bx2-bx1)*(by2-by1) - inter)
+                            iou = inter / union if union > 0 else 0.0
+                            if iou > best_iou:
+                                best_iou, best_idx = iou, i
+                        if best_idx >= 0 and best_iou > 0.3:
+                            track_id_by_idx[best_idx] = tid
+        except Exception as e:
+            log.warning("ByteTrack update failed: %s — falling back to no tracking", e)
+        # ─────────────────────────────────────────────────────────────────────
+
+        h, w = frame_bgr.shape[:2]
+        for i, box in enumerate(boxes):
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
             conf = float(box.conf[0])
             cls_id = int(box.cls[0])
-            track_id = int(box.id[0]) if box.id is not None else None
+            track_id = track_id_by_idx.get(i)  # None if tracker didn't assign this box
             
             # bounds check
-            h, w = frame_bgr.shape[:2]
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
             
