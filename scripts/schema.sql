@@ -67,10 +67,14 @@ CREATE TABLE IF NOT EXISTS watchlist_entries (
 );
 
 -- ─── alerts ──────────────────────────────────────────────────────────────────
+-- Stores both watchlist-match alerts (watchlist_entry_id set, alert_type='watchlist_match')
+-- and rule-based anomaly alerts (watchlist_entry_id NULL, alert_type='stopped_vehicle' etc.)
 CREATE TABLE IF NOT EXISTS alerts (
     id                  UUID  PRIMARY KEY DEFAULT gen_random_uuid(),
-    watchlist_entry_id  UUID  NOT NULL REFERENCES watchlist_entries(id),
+    watchlist_entry_id  UUID  REFERENCES watchlist_entries(id),   -- NULL for anomaly alerts
     detection_id        UUID  NOT NULL REFERENCES detections(id),
+    alert_type          TEXT  NOT NULL DEFAULT 'watchlist_match'
+                              CHECK (alert_type IN ('watchlist_match', 'stopped_vehicle', 'wrong_way')),
     status              TEXT  NOT NULL DEFAULT 'pending'
                               CHECK (status IN ('pending', 'confirmed', 'dismissed')),
     reviewed_by         TEXT,

@@ -57,6 +57,22 @@ def process_camera(cam_external_id: str) -> None:
     from ml.auth import get_cookie
     cookie = get_cookie()
 
+    # ── Stopped-vehicle anomaly detector ────────────────────────────────────
+    # Tracks centroid stability per track_id. If a vehicle barely moves for
+    # STOPPED_FRAMES_THRESHOLD consecutive sampled frames, fire an alert.
+    #
+    # Tuning:
+    #   STOPPED_PIXEL_THRESHOLD: max centroid drift in pixels to count as "still"
+    #     (at 1080p, 20px is about 1% of frame width — parked vs slow-moving)
+    #   STOPPED_FRAMES_THRESHOLD: consecutive still frames before alert fires
+    #     (with frame_skip=5 at 30FPS → 1 frame per ~0.17s; 30 frames ≈ 5 seconds)
+    #
+    # Per track: {track_id: {"cx": float, "cy": float, "still_frames": int, "alerted": bool}}
+    STOPPED_PIXEL_THRESHOLD = 20    # pixels centroid must not move per processed frame
+    STOPPED_FRAMES_THRESHOLD = 30   # ~5 seconds at live 6FPS effective rate
+
+    stopped_tracks: dict[int, dict] = {}
+
     frame_count = 0
     detection_count = 0
 
@@ -71,6 +87,9 @@ def process_camera(cam_external_id: str) -> None:
 
             detections = pipeline.process_frame(frame_bgr, camera_uuid, pts_ms)
             frame_count += 1
+
+            # Track which track_ids were seen this frame (to evict stale ones)
+            seen_track_ids: set[int] = set()
 
             for det in detections:
                 # Upload thumbnail to MinIO
@@ -95,6 +114,45 @@ def process_camera(cam_external_id: str) -> None:
                     )
 
                 detection_count += 1
+
+                # ── Stopped-vehicle detection ─────────────────────────────────
+                if det.track_id is not None:
+                    tid = det.track_id
+                    seen_track_ids.add(tid)
+                    cx = (det.bbox["x1"] + det.bbox["x2"]) / 2.0
+                    cy = (det.bbox["y1"] + det.bbox["y2"]) / 2.0
+
+                    if tid not in stopped_tracks:
+                        stopped_tracks[tid] = {"cx": cx, "cy": cy, "still_frames": 0, "alerted": False}
+                    else:
+                        state = stopped_tracks[tid]
+                        drift = ((cx - state["cx"]) ** 2 + (cy - state["cy"]) ** 2) ** 0.5
+                        if drift <= STOPPED_PIXEL_THRESHOLD:
+                            state["still_frames"] += 1
+                        else:
+                            # Vehicle moved — reset counter and centroid
+                            state["still_frames"] = 0
+                            state["alerted"] = False
+                        # Update centroid (slow-moving vehicles drift slightly)
+                        state["cx"] = cx
+                        state["cy"] = cy
+
+                        # Fire alert if threshold crossed and not already alerted
+                        if state["still_frames"] >= STOPPED_FRAMES_THRESHOLD and not state["alerted"]:
+                            state["alerted"] = True
+                            write_alert(conn, None, det.id, alert_type="stopped_vehicle")
+                            log.warning(
+                                "%s 🚦 STOPPED VEHICLE — track=%d class=%s color=%s "
+                                "still_frames=%d pts=%.1fs",
+                                prefix, tid, det.class_name, det.dominant_color,
+                                state["still_frames"], pts_ms / 1000.0,
+                            )
+                # ─────────────────────────────────────────────────────────────
+
+            # Evict track states for tracks that disappeared (bbox gone for 1+ frame)
+            stale = set(stopped_tracks.keys()) - seen_track_ids
+            for tid in stale:
+                stopped_tracks.pop(tid, None)
 
             # Commit every frame's detections as a batch
             if detections:

@@ -34,12 +34,25 @@ def write_detection(conn, det: Detection) -> None:
             det.embedding, det.thumbnail_key, det.ts, det.pts_ms, det.dominant_color,
         ))
 
-def write_alert(conn, watchlist_entry_id: str, detection_id: str) -> None:
+def write_alert(
+    conn,
+    watchlist_entry_id: str | None,
+    detection_id: str,
+    alert_type: str = "watchlist_match",
+) -> None:
+    """Write an alert row.
+
+    Args:
+        watchlist_entry_id: UUID of the matching watchlist entry, or None for
+            rule-based anomaly alerts (stopped_vehicle, wrong_way, etc.).
+        detection_id: UUID of the detection that triggered the alert.
+        alert_type: One of 'watchlist_match', 'stopped_vehicle', 'wrong_way'.
+    """
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO alerts (watchlist_entry_id, detection_id, status)
-            VALUES (%s, %s, 'pending')
-        """, (watchlist_entry_id, detection_id))
+            INSERT INTO alerts (watchlist_entry_id, detection_id, alert_type, status)
+            VALUES (%s, %s, %s, 'pending')
+        """, (watchlist_entry_id, detection_id, alert_type))
 
 def commit(conn):
     try:
