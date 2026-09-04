@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS detections (
     plate_confidence REAL,
     embedding        vector(512),                   -- open_clip ViT-B/32, L2-normalised
     thumbnail_key    TEXT,                          -- MinIO object key — backend generates URLs
-    ts               TIMESTAMPTZ NOT NULL,          -- frame PTS (when detected, not when written)
+    ts               TIMESTAMPTZ NOT NULL,          -- wall-clock UTC at detection time
+    pts_ms           DOUBLE PRECISION,              -- position-in-segment (ms) from CAP_PROP_POS_MSEC; used to seek video player to the exact frame
+    dominant_color   TEXT,                          -- HSV-derived colour bucket: red | white | black | silver | blue | yellow | green | orange | unknown
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -31,6 +31,8 @@ class Detection:
     embedding: list[float]
     thumbnail_key: Optional[str]
     ts: datetime
+    pts_ms: float           # position-in-segment in milliseconds (from CAP_PROP_POS_MSEC)
+    dominant_color: Optional[str]  # HSV colour bucket for NL search precision
 
 class DetectionPipeline:
     def __init__(self):
@@ -73,7 +75,9 @@ class DetectionPipeline:
             embedding = self._embed_crop(crop)
             if not embedding:
                 continue
-                
+
+            dominant_color = self._extract_color(crop)
+
             plate_text, plate_conf = None, None
             if cls_id in [2, 3, 5, 7]: # vehicles
                 plate_text, plate_conf = self._extract_plate(crop)
@@ -89,7 +93,9 @@ class DetectionPipeline:
                 plate_confidence=plate_conf,
                 embedding=embedding,
                 thumbnail_key=None,
-                ts=ts
+                ts=ts,
+                pts_ms=pts_ms,
+                dominant_color=dominant_color,
             ))
             
         return detections
@@ -105,6 +111,62 @@ class DetectionPipeline:
             return embed[0].cpu().tolist()
         except Exception:
             return []
+
+    def _extract_color(self, crop_bgr: np.ndarray) -> Optional[str]:
+        """Dominant colour of the crop using HSV histogram bucketing.
+
+        Returns a colour name string suitable for NL search filtering:
+        red | white | black | silver | blue | yellow | green | orange | unknown
+        """
+        try:
+            hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
+            h = hsv[:, :, 0].astype(np.float32)  # 0–179 in OpenCV
+            s = hsv[:, :, 1].astype(np.float32)  # 0–255
+            v = hsv[:, :, 2].astype(np.float32)  # 0–255
+
+            total = h.size
+            if total == 0:
+                return "unknown"
+
+            # ── Achromatic buckets (low saturation) ───────────────────────
+            low_s_mask = s < 50   # unsaturated pixels
+            low_s_frac = low_s_mask.sum() / total
+
+            if low_s_frac > 0.55:
+                # Mostly achromatic — classify by brightness
+                mean_v = float(v[low_s_mask].mean()) if low_s_mask.any() else float(v.mean())
+                if mean_v < 60:
+                    return "black"
+                elif mean_v < 140:
+                    return "silver"
+                else:
+                    return "white"
+
+            # ── Chromatic: use hue histogram on saturated pixels only ─────
+            sat_mask = s >= 50
+            if not sat_mask.any():
+                return "unknown"
+
+            h_sat = h[sat_mask]
+
+            # OpenCV hue: 0–179 (degrees / 2). Bucket boundaries in that space:
+            #   red:    [0,10) ∪ [170,180)
+            #   orange: [10,20)
+            #   yellow: [20,35)
+            #   green:  [35,85)
+            #   blue:   [85,130)
+            #   (purple/violet skipped — rare in vehicles)
+            buckets = {
+                "red":    ((h_sat < 10) | (h_sat >= 170)).sum(),
+                "orange": ((h_sat >= 10) & (h_sat < 20)).sum(),
+                "yellow": ((h_sat >= 20) & (h_sat < 35)).sum(),
+                "green":  ((h_sat >= 35) & (h_sat < 85)).sum(),
+                "blue":   ((h_sat >= 85) & (h_sat < 130)).sum(),
+            }
+            dominant = max(buckets, key=lambda k: buckets[k])
+            return dominant
+        except Exception:
+            return "unknown"
 
     def _extract_plate(self, vehicle_crop: np.ndarray) -> tuple[Optional[str], Optional[float]]:
         try:

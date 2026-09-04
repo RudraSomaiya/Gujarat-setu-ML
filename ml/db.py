@@ -25,13 +25,13 @@ def write_detection(conn, det: Detection) -> None:
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO detections 
-            (id, camera_id, track_id, class, bbox, confidence, plate_text, plate_confidence, embedding, thumbnail_key, ts)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (id, camera_id, track_id, class, bbox, confidence, plate_text, plate_confidence, embedding, thumbnail_key, ts, pts_ms, dominant_color)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
         """, (
             det.id, det.camera_id, det.track_id, det.class_name, json.dumps(det.bbox), 
             det.confidence, det.plate_text, det.plate_confidence, 
-            det.embedding, det.thumbnail_key, det.ts
+            det.embedding, det.thumbnail_key, det.ts, det.pts_ms, det.dominant_color,
         ))
 
 def write_alert(conn, watchlist_entry_id: str, detection_id: str) -> None:
