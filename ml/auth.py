@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Optional
 
 import requests
@@ -68,12 +69,20 @@ def get_sentinel_cookie(password: str) -> str:
 
     # allow_redirects=False is critical: the cookie is in the *302* response,
     # not in any subsequent page.
-    response = requests.post(
-        login_url,
-        data={"email": settings.sentinel_email, "password": password},
-        allow_redirects=False,
-        timeout=10,
-    )
+    for attempt in range(1, 4):
+        try:
+            response = requests.post(
+                login_url,
+                data={"email": settings.sentinel_email, "password": password},
+                allow_redirects=False,
+                timeout=30,
+            )
+            break
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            if attempt == 3:
+                raise
+            logger.warning("Sentinel login attempt %d timed out/failed (%s), retrying...", attempt, exc)
+            time.sleep(2)
 
     if response.status_code != 302:
         raise RuntimeError(

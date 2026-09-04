@@ -67,6 +67,7 @@ def index_camera(
     start_time: str | None,
     end_time: str | None,
     resume: bool,
+    max_frames: int | None = None,
 ) -> dict:
     """
     Index a single camera. Returns a summary dict with keys:
@@ -138,6 +139,10 @@ def index_camera(
                         prefix, frame_count, detection_count, elapsed,
                     )
 
+                if max_frames is not None and frame_count >= max_frames:
+                    log.info("%s Reached --max-frames limit (%d), finishing camera early.", prefix, max_frames)
+                    break
+
     except StopIteration:
         pass  # stream.frames() exhausted the archive -- normal end
     except Exception as exc:
@@ -174,6 +179,7 @@ def index_camera(
 
 
 def main() -> None:
+    global BATCH_FRAME_SKIP
     parser = argparse.ArgumentParser(description="Setu batch offline indexer")
     parser.add_argument(
         "--cameras",
@@ -203,9 +209,14 @@ def main() -> None:
         default=BATCH_FRAME_SKIP,
         help=f"Sample every Nth frame (default: {BATCH_FRAME_SKIP})",
     )
+    parser.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        help="Max frames to sample per camera before stopping (ideal for quick test runs)",
+    )
     args = parser.parse_args()
 
-    global BATCH_FRAME_SKIP
     BATCH_FRAME_SKIP = args.frame_skip
 
     if args.cameras.lower() == "all":
@@ -218,6 +229,8 @@ def main() -> None:
     log.info("Cameras: %s (%d total)", args.cameras, len(cam_ids))
     log.info("Frame skip: every %dth frame (approx 1 frame / %.1fs at 30 FPS)",
              BATCH_FRAME_SKIP, BATCH_FRAME_SKIP / 30.0)
+    if args.max_frames:
+        log.info("Max frames per camera: %d", args.max_frames)
     if args.start_time or args.end_time:
         log.info("Time window: %s -> %s", args.start_time or "00:00", args.end_time or "12:00")
     if args.resume:
@@ -245,6 +258,7 @@ def main() -> None:
             start_time=args.start_time,
             end_time=args.end_time,
             resume=args.resume,
+            max_frames=args.max_frames,
         )
         results.append(result)
 

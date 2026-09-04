@@ -80,7 +80,7 @@ class DetectionPipeline:
         # We build a dict {box_idx: track_id} for fast lookup below.
         track_id_by_idx: dict[int, int] = {}
         try:
-            tracked = self.tracker.update(yolo_result, frame_bgr)
+            tracked = self.tracker.update(boxes.cpu(), frame_bgr)
             if tracked is not None and len(tracked) > 0:
                 # tracked array columns: x1,y1,x2,y2, track_id, conf, cls, *extra
                 # The tracker preserves the detection index in an attribute on STrack;

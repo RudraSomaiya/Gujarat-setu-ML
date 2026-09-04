@@ -71,7 +71,7 @@ class _HLSFetcher:
     def fetch_manifest(self, cam_id: str) -> tuple[list[str], str]:
         """Fetch index.m3u8 and return (segment_urls, key_url)."""
         url = settings.hls_url(cam_id)
-        r = self._session.get(url, timeout=20)
+        r = self._session.get(url, timeout=60)
         r.raise_for_status()
 
         key_url: Optional[str] = None

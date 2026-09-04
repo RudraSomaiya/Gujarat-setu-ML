@@ -26,19 +26,40 @@ def main():
     print("Connecting to PostgreSQL...")
     conn = get_connection()
     with conn.cursor() as cur:
-        # Get counts before truncating
-        cur.execute("SELECT COUNT(*) as count FROM detections;")
-        det_count = cur.fetchone()['count']
-        
-        cur.execute("SELECT COUNT(*) as count FROM alerts;")
-        alert_count = cur.fetchone()['count']
-        
-        cur.execute("TRUNCATE TABLE detections CASCADE;")
-        cur.execute("TRUNCATE TABLE alerts CASCADE;")
-        
-        print(f"Truncated {det_count} detections and {alert_count} alerts from PostgreSQL.")
-    
+        # Get counts before resetting
+        try:
+            cur.execute("SELECT COUNT(*) as count FROM detections;")
+            det_count = cur.fetchone()['count']
+        except Exception:
+            det_count = 0
+            conn.rollback()
+
+        try:
+            cur.execute("SELECT COUNT(*) as count FROM alerts;")
+            alert_count = cur.fetchone()['count']
+        except Exception:
+            alert_count = 0
+            conn.rollback()
+
+        # Drop tables to recreate with latest schema
+        cur.execute("DROP TABLE IF EXISTS alerts CASCADE;")
+        cur.execute("DROP TABLE IF EXISTS detections CASCADE;")
+        print(f"Dropped {det_count} detections and {alert_count} alerts from PostgreSQL.")
+
     commit(conn)
+
+    # Re-apply schema.sql
+    from pathlib import Path
+    schema_file = Path(__file__).parent / "schema.sql"
+    if schema_file.exists():
+        print(f"Applying latest schema from {schema_file}...")
+        with open(schema_file, "r", encoding="utf-8") as f:
+            sql = f.read()
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        commit(conn)
+        print("Schema applied successfully.")
+
     conn.close()
     print("Reset complete.")
 

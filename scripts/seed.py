@@ -61,26 +61,14 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
 
 
-def get_cookie() -> str:
-    resp = requests.post(
-        f"{SENTINEL_BASE}/auth/login",
-        data={"password": SENTINEL_PASSWORD},
-        allow_redirects=False,
-        timeout=10,
-    )
-    cookie = resp.cookies.get("sentinel") or (
-        resp.headers.get("set-cookie", "").split("sentinel=")[-1].split(";")[0]
-    )
-    if not cookie:
-        raise RuntimeError("Login failed — check password")
-    return cookie
+from ml.auth import get_cookie
 
 
 def fetch_cameras(cookie: str) -> list[dict]:
     resp = requests.get(
         f"{SENTINEL_BASE}/cameras.json",
         cookies={"sentinel": cookie},
-        timeout=10,
+        timeout=30,
     )
     resp.raise_for_status()
     return resp.json()
