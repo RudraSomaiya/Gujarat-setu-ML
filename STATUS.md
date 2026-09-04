@@ -3,19 +3,40 @@
 **Project:** Gujarat Police Innovation Challenge 2026 — Setu Surveillance Intelligence  
 **Role:** ML Engineer (Rudra)  
 **Current Date:** September 04, 2026  
-**Timeline Target:** Complete ML Layer by **September 05 EOD** -> Backend & Frontend integration by **September 06 midnight**
+# 🚀 STATUS: ML Pipeline Feature Complete
 
----
+**Last Updated:** Sept 4, 2026
 
-## 1. Executive Summary
+The ML Pipeline is now **Feature Complete** for the hackathon. 
 
-The Setu ML worker processes 30 real camera feeds (12-hour HLS loops, **primarily 1080p** — ~18/30 cameras confirmed 1920×1080, ~5 are 854×480, AES-128 encrypted) provided by the hackathon sandbox at `cctv.corp8.cloud`. The primary goal is **Temporal Natural Language Semantic Search** and **Visual Re-identification** across ~360 hours of surveillance footage, reducing hundreds of hours of manual footage review to sub-second vector queries.
+## 1. What's Done
+- **GPU Inference:** YOLOv8 + ByteTrack + CLIP running flawlessly on the RTX 3060 (90+ FPS).
+- **CLIP Zero-Shot NLP:** Classifications (e.g., "auto_rickshaw") and Color extraction now use CLIP text-embeddings, matching perfectly with natural language searches.
+- **Anomaly Detection:** Rule-based `stopped_vehicle` detection added to the live worker. It tracks centroid stability and writes to the `alerts` table.
+- **Database Schema:** `detections`, `cameras`, `watchlist_entries`, and `alerts` tables are fully structured. `pts_ms` is stored for accurate video seeking.
+- **Network Burst-Sampling:** The `batch_index.py` tool has been upgraded to burst-sample the heavily rate-limited Hackathon streaming server (grabbing exactly 100 6-second segments spaced evenly over 12 hours) to guarantee completion overnight.
 
----
+## 2. Handoff to Backend / Frontend
 
-## 2. Completed Thus Far
+### The Two Modes (Crucial to Understand)
+1. **The Setup (`scripts/batch_index.py`):** Runs sequentially, taking "bursts" of video across the 12 hours. It populates the database so the demo has history to search. **It does not run anomaly tracking** (because it jumps through time).
+2. **The Live Product (`ml/worker.py`):** The actual daemon meant for production. It spawns 30 threads and watches all cameras *simultaneously and continuously*. This is where real-time **Watchlist Alerts** and **Stopped-Vehicle Anomalies** are detected and pushed via PostgreSQL `NOTIFY`.
 
-### A. Feed Ingestion & Streaming
+### Database Contract
+- Search queries should hit `detections` and sort by `embedding <=> query_vector ASC`.
+- Backend should listen to PostgreSQL `NOTIFY 'setu_alerts'` to push real-time anomaly popups to the frontend.
+- `pts_ms` inside `detections` is the millisecond timestamp to seek the video player to.
+
+### Hackathon Demo Caveats
+- **Backups:** Because the cameras are on a 12-hour pre-recorded loop, if the live worker processes a segment tomorrow that the batch indexer processed tonight, you'll get duplicate vehicles in the DB. **TAKE A DB BACKUP TOMORROW MORNING BEFORE DEMOING** so you can easily restore your pristine 12-hour dataset.
+- **Cloud CPUs:** AI models auto-detect CPUs. If you deploy the live worker (`worker.py`) to a standard cloud CPU, it will choke trying to process 30 cameras at 6 FPS. For the live demo, either run it on a laptop with a GPU, or restrict it to 1-2 cameras if presenting from a cloud CPU.
+
+## 3. Immediate Next Steps
+1. Run `python -m scripts.batch_index` overnight.
+2. In the morning, run a `pg_dump -U setu -F c setu > backup.dump` to secure the data.
+3. Test natural language search.
+4. Hand off to the Backend team.
+
 - [x] **HLS Decryption Engine (`ml/stream.py`)**: Implemented manual AES-128 CBC segment decryption via `pycryptodome` and OpenCV frame decoding.
 - [x] **Grey Smear Artifact Resolution**: Identified that RTSP TCP streaming caused severe grey smearing due to missed P-frame references on reconnects. Switching to HLS segments (each starting with an IDR keyframe) completely eliminated this issue.
 - [x] **Stream Prefetching**: Double-buffered segment fetcher downloads segment N+1 in the background while segment N is decoding.

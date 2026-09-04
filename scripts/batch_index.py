@@ -49,8 +49,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# frame skip for batch mode -- 1 frame per ~5 s at 30 FPS
-BATCH_FRAME_SKIP = 150
+# Frame skip for batch mode burst sampling (2 FPS at 30 FPS source)
+BATCH_FRAME_SKIP = 15
+MAX_SEGMENTS_PER_CAMERA = 100
 
 
 def _get_detection_count(conn, camera_uuid: str) -> int:
@@ -109,6 +110,7 @@ def index_camera(
             for frame_idx, pts_ms, frame_bgr in stream.frames(
                 start_time=start_time,
                 end_time=end_time,
+                max_segments=MAX_SEGMENTS_PER_CAMERA,
             ):
                 detections = pipeline.process_frame(frame_bgr, camera_uuid, pts_ms)
                 frame_count += 1

@@ -207,6 +207,7 @@ class CameraStream:
         end_time: Optional[str] = None,
         start_seg: int = 0,
         end_seg: Optional[int] = None,
+        max_segments: Optional[int] = None,
     ) -> Generator:
         fetcher = _HLSFetcher(self.cookie)
         frame_idx = 0
@@ -237,7 +238,15 @@ class CameraStream:
                 _end = min(_end, len(segments))
                 _start = max(0, min(_start, _end))
                 window = segments[_start:_end]
-                if _start > 0 or _end < len(segments):
+                
+                if max_segments is not None and len(window) > max_segments:
+                    step = max(1, len(window) // max_segments)
+                    window = window[::step][:max_segments]
+                    log.info(
+                        "%s Burst sampling enabled: selected %d segments (1 every %d segments)",
+                        self.prefix, len(window), step
+                    )
+                elif _start > 0 or _end < len(segments):
                     log.info(
                         "%s Time window: segments %d–%d of %d (~%.1f h into archive)",
                         self.prefix, _start, _end, len(segments),
@@ -326,6 +335,7 @@ class CameraStream:
         self,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
+        max_segments: Optional[int] = None,
     ) -> Generator:
         """Yield (frame_idx, pts_ms, frame_bgr) continuously.
 
@@ -334,6 +344,8 @@ class CameraStream:
                 archive to start from. Only applies to the HLS path.
             end_time: Optional 'HH:MM' or 'HH:MM:SS' position to stop at.
                 When reached, iteration ends (does not loop).
+            max_segments: If set, burst-samples this many segments evenly
+                distributed across the time window (bypassing download of other segments).
         """
         if self.use_rtsp:
             yield from self._frames_rtsp()
@@ -344,6 +356,7 @@ class CameraStream:
             yield from self._frames_hls(
                 start_time=start_time,
                 end_time=end_time,
+                max_segments=max_segments,
             )
 
     def __enter__(self) -> "CameraStream":
