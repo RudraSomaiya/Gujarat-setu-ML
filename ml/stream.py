@@ -140,7 +140,7 @@ class CameraStream:
     - HLS manual-decrypt loop otherwise
     """
 
-    def __init__(self, cam_id: str, cookie: str) -> None:
+    def __init__(self, cam_id: str, cookie: str, loop: bool = True, frame_skip: Optional[int] = None) -> None:
         self.cam_id = cam_id
         self.cookie = cookie
         self.cap: Optional[cv2.VideoCapture] = None
@@ -148,6 +148,11 @@ class CameraStream:
         # RTSP kept as opt-in via FORCE_RTSP=true in .env for on-LAN / low-latency use.
         self.use_rtsp = getattr(settings, "force_rtsp", False) and is_rtsp_reachable(cam_id)
         self.prefix = f"[{cam_id}]"
+        # loop=False → stop after one pass (batch indexer mode)
+        # loop=True  → loop forever (live worker mode)
+        self._loop = loop
+        # Use explicit frame_skip if given, otherwise fall back to settings
+        self._frame_skip = frame_skip if frame_skip is not None else settings.frame_skip
 
         mode = "RTSP" if self.use_rtsp else "HLS"
         url_display = settings.rtsp_url(cam_id) if self.use_rtsp else settings.hls_url(cam_id)
@@ -284,10 +289,10 @@ class CameraStream:
                     prefetch_event.clear()
                     prefetch_data[0] = None
 
-                    # Start prefetching the next segment right away
-                    if seg_idx + 1 < len(segments):
+                    # FIX #2: prefetch from window (burst list), NOT segments (full 7200-item list)
+                    if seg_idx + 1 < len(window):
                         threading.Thread(
-                            target=_prefetch, args=(segments[seg_idx + 1],), daemon=True
+                            target=_prefetch, args=(window[seg_idx + 1],), daemon=True
                         ).start()
 
                     if seg_bytes is None:
@@ -305,7 +310,8 @@ class CameraStream:
                             ok, frame = cap.read()
                             if not ok or frame is None:
                                 break
-                            if seg_frames % settings.frame_skip == 0:
+                            # FIX #4: use self._frame_skip (set by caller) not global settings
+                            if seg_frames % self._frame_skip == 0:
                                 pts_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
                                 yield frame_idx, pts_ms, frame
                             seg_frames += 1
@@ -314,7 +320,7 @@ class CameraStream:
 
                         log.debug(
                             "%s Segment %d/%d — %d frames decoded",
-                            self.prefix, seg_idx + 1, len(segments), seg_frames,
+                            self.prefix, seg_idx + 1, len(window), seg_frames,
                         )
                     finally:
                         try:
@@ -322,6 +328,10 @@ class CameraStream:
                         except OSError:
                             pass
 
+                # FIX #1: if loop=False (batch mode), stop cleanly instead of looping forever
+                if not self._loop:
+                    log.info("%s HLS archive complete — batch done, moving to next camera.", self.prefix)
+                    return
                 log.info("%s HLS archive complete — looping from start", self.prefix)
 
             except Exception as exc:

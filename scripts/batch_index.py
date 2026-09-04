@@ -64,7 +64,6 @@ def _get_detection_count(conn, camera_uuid: str) -> int:
 
 def index_camera(
     cam_external_id: str,
-    cookie: str,
     start_time: str | None,
     end_time: str | None,
     resume: bool,
@@ -76,6 +75,13 @@ def index_camera(
     """
     prefix = f"[{cam_external_id}]"
     log.info("%s -- Starting", prefix)
+
+    # FIX #3: refresh cookie per-camera so it never expires mid-run overnight
+    try:
+        cookie = get_cookie()
+    except Exception as exc:
+        log.error("%s Failed to get auth cookie: %s", prefix, exc)
+        return {"camera_id": cam_external_id, "skipped": True, "reason": "auth_failed"}
 
     conn = get_connection()
     pipeline = DetectionPipeline()
@@ -101,12 +107,10 @@ def index_camera(
     detection_count = 0
     alert_count = 0
 
-    # Override frame_skip for batch mode -- much more aggressive sampling
-    original_skip = settings.frame_skip
-    settings.__dict__["frame_skip"] = BATCH_FRAME_SKIP
-
     try:
-        with CameraStream(cam_external_id, cookie) as stream:
+        # FIX #4: pass frame_skip directly to CameraStream instead of mutating global settings
+        # FIX #1: loop=False tells the stream to stop after one pass and not loop forever
+        with CameraStream(cam_external_id, cookie, loop=False, frame_skip=BATCH_FRAME_SKIP) as stream:
             for frame_idx, pts_ms, frame_bgr in stream.frames(
                 start_time=start_time,
                 end_time=end_time,
@@ -159,9 +163,6 @@ def index_camera(
             "duration_s": round(time.monotonic() - t0, 1),
             "error": str(exc),
         }
-    finally:
-        # Restore original frame_skip
-        settings.__dict__["frame_skip"] = original_skip
 
     duration = round(time.monotonic() - t0, 1)
     conn.close()
@@ -243,8 +244,6 @@ def main() -> None:
     warm_all_models()
     log.info("Models ready")
 
-    cookie = get_cookie()
-
     run_start = time.monotonic()
     results = []
 
@@ -256,7 +255,6 @@ def main() -> None:
 
         result = index_camera(
             cam_id,
-            cookie,
             start_time=args.start_time,
             end_time=args.end_time,
             resume=args.resume,
